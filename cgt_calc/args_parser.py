@@ -147,6 +147,27 @@ Environment variables:
         action="store_true",
         help="do not generate PDF report",
     )
+    output_group.add_argument(
+        "--save-cost-summary",
+        type=output_path_type,
+        metavar="PATH",
+        default=None,
+        help=(
+            "write this year's cost figures to PATH as JSON, so another tool "
+            "can check them without anyone retyping them"
+        ),
+    )
+    output_group.add_argument(
+        "--save-raw-transactions",
+        type=output_path_type,
+        metavar="PATH",
+        default=None,
+        help=(
+            "write the parsed transactions to PATH in the RAW format, which "
+            "--raw-file can read back. Lets another tool be given exactly what "
+            "this parser understood"
+        ),
+    )
 
     # General Options
     general_group = parser.add_argument_group("General")

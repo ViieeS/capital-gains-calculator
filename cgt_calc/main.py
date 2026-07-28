@@ -22,6 +22,7 @@ from .const import (
     INTERNAL_START_DATE,
     UK_CURRENCY,
 )
+from .cost_summary import save_cost_summary
 from .currency_converter import CurrencyConverter
 from .current_price_fetcher import CurrentPriceFetcher
 from .dates import get_tax_year_end, get_tax_year_start, is_date
@@ -60,6 +61,7 @@ from .model import (
     SpinOff,
 )
 from .parsers.broker_registry import BrokerRegistry
+from .raw_exporter import save_raw_transactions
 from .setup_logging import setup_logging
 from .spin_off_handler import SpinOffHandler
 from .transaction_log import add_to_list, has_key
@@ -1432,6 +1434,11 @@ def calculate_cgt(args: argparse.Namespace) -> None:
     # Read data from input files
     isin_converter = IsinConverter(isin_translation_file)
     broker_transactions = BrokerRegistry.load_all_transactions(args, isin_converter)
+
+    if args.save_raw_transactions:
+        save_raw_transactions(broker_transactions, args.save_raw_transactions)
+        print(f"Saved parsed transactions to {args.save_raw_transactions}")
+
     currency_converter = CurrencyConverter(args.exchange_rates_file)
     price_fetcher = CurrentPriceFetcher(currency_converter)
     initial_prices = InitialPrices(args.initial_prices_file)
@@ -1457,6 +1464,10 @@ def calculate_cgt(args: argparse.Namespace) -> None:
     # Second pass calculates capital gain tax for the given tax year.
     report = calculator.calculate_capital_gain()
     print(report)
+
+    if args.save_cost_summary:
+        save_cost_summary(report, args.save_cost_summary)
+        print(f"Saved cost summary to {args.save_cost_summary}")
 
     # Generate PDF report.
     if not args.no_report:
