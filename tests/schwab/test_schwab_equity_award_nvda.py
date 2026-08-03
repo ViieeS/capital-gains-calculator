@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import datetime
 from decimal import Decimal
+import json
 from pathlib import Path
 
 import pytest
 
+from cgt_calc.exceptions import ParsingError
 from cgt_calc.model import ActionType
 from cgt_calc.parsers import schwab_equity_award_json
 from cgt_calc.parsers.schwab_equity_award_json import nvidia_split_multiplier
@@ -175,11 +177,118 @@ def test_the_position_matches_the_transactions(transactions: list) -> None:
         if t.action == ActionType.STOCK_ACTIVITY
     )
     disposed = sum(
-        t.quantity or Decimal(0)
-        for t in transactions
-        if t.action == ActionType.SELL
+        t.quantity or Decimal(0) for t in transactions if t.action == ActionType.SELL
     )
 
     assert acquired == Decimal(1730)
     assert disposed == Decimal(690)
     assert acquired - disposed == Decimal(1040)
+
+
+def mutated(tmp_path: Path, change) -> Path:
+    """Write a copy of the fixture with `change` applied to its transactions."""
+    data = json.loads(FIXTURE.read_text())
+    change(data["Transactions"])
+    path = tmp_path / "mutated.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def parse(path: Path) -> list:
+    """Parse an export, whatever it contains."""
+    return schwab_equity_award_json.SchwabEquityAwardsJSONParser().load_from_file(path)
+
+
+def details_of(row: dict) -> dict:
+    """Return a transaction's detail block, whichever nesting it uses."""
+    first = row["TransactionDetails"][0]
+    return first.get("Details", first)
+
+
+def test_a_disposal_schwab_already_restated_is_caught(tmp_path: Path) -> None:
+    """The failure this check exists for, and the reason it needs one.
+
+    Converting a disposal Schwab had already converted leaves the proceeds
+    right and the share count ten times too high. Nothing fails to balance, so
+    before this check the run finished cleanly on a different answer.
+    """
+
+    def already_restated(rows: list) -> None:
+        for row in rows:
+            if row.get("Action") == "Sale" and row["Date"] == "01/23/2023":
+                row["Quantity"] = "20"
+                details_of(row)["SalePrice"] = "$19.192"
+
+    with pytest.raises(ParsingError, match="already restated"):
+        parse(mutated(tmp_path, already_restated))
+
+
+def test_a_disposal_in_its_own_units_is_left_alone(tmp_path: Path) -> None:
+    """The check has to stay quiet on the units Schwab actually writes.
+
+    A guard that fires on correct data is worse than no guard, because the way
+    round it is to switch it off.
+    """
+
+    def nothing(rows: list) -> None:
+        pass
+
+    assert parse(mutated(tmp_path, nothing))
+
+
+def test_a_split_missing_from_the_table_is_caught(tmp_path: Path) -> None:
+    """A Lapse states both units at once, so it can contradict the table.
+
+    Here the counts are consistent with a split the table does not have. The
+    point is that this is caught from the file alone, with no market data and
+    no broker statement.
+    """
+
+    def as_if_another_split(rows: list) -> None:
+        for row in rows:
+            if row.get("Action") == "Lapse" and row["Date"] == "09/18/2024":
+                row["Quantity"] = "2000"
+
+    with pytest.raises(ParsingError, match="split is missing"):
+        parse(mutated(tmp_path, as_if_another_split))
+
+
+def test_espp_counts_must_account_for_every_share(tmp_path: Path) -> None:
+    """A "0" is a count, not a blank.
+
+    Reading it as one silently dropped the whole purchase from the pool: 200
+    shares in, nothing out, no error.
+    """
+
+    def zero_deposited(rows: list) -> None:
+        for row in rows:
+            if row.get("Description") == "ESPP" and row["Date"] == "02/27/2026":
+                details_of(row)["NetSharesDeposited"] = "0"
+
+    with pytest.raises(ParsingError, match="accounts for"):
+        parse(mutated(tmp_path, zero_deposited))
+
+
+def test_espp_with_everything_withheld_pools_nothing(tmp_path: Path) -> None:
+    """And when the counts do add up, zero deposited is simply zero.
+
+    The same "0" as above, now corroborated. Distinguishing the two is the
+    whole point of asking the counts rather than the field's emptiness.
+    """
+
+    def all_withheld(rows: list) -> None:
+        for row in rows:
+            if row.get("Description") == "ESPP" and row["Date"] == "02/27/2026":
+                details = details_of(row)
+                details["NetSharesDeposited"] = "0"
+                details["SharesWithheld"] = "200"
+
+    espp = [
+        t
+        for t in parse(mutated(tmp_path, all_withheld))
+        if t.action == ActionType.STOCK_ACTIVITY
+        and t.date == datetime.date(2026, 2, 27)
+    ]
+
+    assert len(espp) == 1
+    assert espp[0].quantity == Decimal(0)
