@@ -17,6 +17,8 @@ from cgt_calc.model import CapitalGainsReport, PortfolioEntry
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from cgt_calc.parsers.schwab_equity_award_json import JsonRowType
+
 
 def build_report(
     gain: str = "120000.00",
@@ -44,15 +46,17 @@ def build_report(
         calculation_log_yields={},
         total_uk_interest=Decimal(0),
         total_foreign_interest=Decimal(0),
+        total_interest_tax=Decimal(0),
         show_unrealized_gains=False,
     )
 
 
-def written(tmp_path: Path, report: CapitalGainsReport) -> dict:
+def written(tmp_path: Path, report: CapitalGainsReport) -> JsonRowType:
     """Write the summary and read it back."""
     path = tmp_path / "summary.json"
     save_cost_summary(report, path)
-    return json.loads(path.read_text())
+    result: JsonRowType = json.loads(path.read_text())
+    return result
 
 
 def test_the_three_figures_agree(tmp_path: Path) -> None:
